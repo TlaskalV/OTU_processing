@@ -6,11 +6,11 @@ library(RColorBrewer)
 library(ggplot2)
 library(readr)
 library(xlsx)
-library(Rmisc)
+library(Rmisc) # summarySE, musi byt pred dplyr
 library(dplyr)
 library(tidyr)
 library(agricolae) # anova a post hoc test
-library(gridExtra)
+library(gridExtra) # razeni grafu
 
 #### Uprava tabulek ####
 
@@ -357,7 +357,7 @@ summary(indval, alpha = 1)
 class(indval)
 
 indic_sig <- read.csv(header = FALSE, "D:/Vojta/Disk/Laborka/Data/Projekty/Pralesy_Zofin/Zofin_2013_working/New_database_analysis_R_script/indic_sig.csv")
-indicatory_tax <- rename(indic_sig, `cluster_name` = `V1`) %>%
+indicatory_tax <- dplyr::rename(indic_sig, `cluster_name` = `V1`) %>%
   left_join(tax_w, by = "cluster_name")
 write.table(indicatory_tax, file = "indicatory_tax.csv", row.names = FALSE, col.names = TRUE, dec = ".", sep = ";")
 

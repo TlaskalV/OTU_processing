@@ -1,13 +1,18 @@
 ####Knihovny####
 
 # library(swirl)
-library(Rmisc)
-library(dplyr)
-library(tidyr)
-library(ggplot2)
+library(vegan)
+library(vegan3d)
+library(BiodiversityR) # for netsed.npmanova
 library(RColorBrewer)
+library(ggplot2)
 library(readr)
 library(xlsx)
+library(Rmisc) # summarySE, musi byt pred dplyr
+library(dplyr)
+library(tidyr)
+library(agricolae) # anova a post hoc test
+library(gridExtra) # razeni grafu
 
 setwd("D:/Vojta/Disk/Laborka/Data/Manualy/Skripty_R_Python/OTU_processing_test")
 
@@ -264,7 +269,7 @@ proteo_class <- group_by(table_all, class, sample) %>% # procenta pro class u Pr
            class ==  "Epsilonproteobacteria" |
            class == "Acidithiobacillia" | 
            class == "Oligoflexia") %>% # vyfiltrovat pouze Proteobacteria 
-  rename(phylum = class) %>% # pro shodu hlavicek v dalsim bloku
+  dplyr::rename(phylum = class) %>% # pro shodu hlavicek v dalsim bloku
   arrange(desc(per), phylum) %>% # serazeni
   print
 # write.table(proteo_class, file = "proteo_class.csv", row.names = FALSE, col.names = TRUE, dec = ".", sep = ";")
@@ -418,19 +423,19 @@ table_div <- left_join(div_w, samples_w, by = "sample") # vytvoreni klicove tabu
 
 stat_div_year_chao <- summarySE(table_div, measurevar = "Chao-1", groupvars = "year", conf.interval = 0.95) # statistika pro jednotliva meritka
 stat_div_year_chao <- mutate(stat_div_year_chao, indice = "Chao-1") %>% 
-  rename(avg_val = `Chao-1`)
+  dplyr::rename(avg_val = `Chao-1`)
 
 stat_div_year_sw <- summarySE(table_div, measurevar = "Shannon-Wiener Diversity Index", groupvars = "year", conf.interval = 0.95)
 stat_div_year_sw <- mutate(stat_div_year_sw, indice = "Shannon-Wiener Diversity Index")  %>%
-  rename(avg_val = `Shannon-Wiener Diversity Index`) 
+  dplyr::rename(avg_val = `Shannon-Wiener Diversity Index`) 
 
 stat_div_year_even <- summarySE(table_div, measurevar = "Evenness", groupvars = "year", conf.interval = 0.95)
 stat_div_year_even <- mutate(stat_div_year_even, indice = "Evennness") %>%
-  rename(avg_val = `Evenness`) 
+  dplyr::rename(avg_val = `Evenness`) 
 
 stat_div_year_80 <- summarySE(table_div, measurevar = "Species Richness - 80% diversity", groupvars = "year", conf.interval = 0.95)
 stat_div_year_80 <- mutate(stat_div_year_80, indice = "80% diversity") %>%
-  rename(avg_val = `Species Richness - 80% diversity`) 
+  dplyr::rename(avg_val = `Species Richness - 80% diversity`) 
 
 indices_all_year <- bind_rows(stat_div_year_chao, stat_div_year_sw) %>% # spojeni statistiky dohromady
   bind_rows(stat_div_year_even) %>%
@@ -456,19 +461,19 @@ ggplot(stat_div_year_chao, aes(year, `Chao-1`, colours = )) + # funguje pro jedn
 
 stat_div_tree_chao <- summarySE(table_div, measurevar = "Chao-1", groupvars = "tree", conf.interval = 0.95) # statistika pro jednotliva meritka
 stat_div_tree_chao <- mutate(stat_div_tree_chao, indice = "Chao-1") %>% 
-  rename(avg_val = `Chao-1`)
+  dplyr::rename(avg_val = `Chao-1`)
 
 stat_div_tree_sw <- summarySE(table_div, measurevar = "Shannon-Wiener Diversity Index", groupvars = "tree", conf.interval = 0.95)
 stat_div_tree_sw <- mutate(stat_div_tree_sw, indice = "Shannon-Wiener Diversity Index")  %>%
-  rename(avg_val = `Shannon-Wiener Diversity Index`) 
+  dplyr::rename(avg_val = `Shannon-Wiener Diversity Index`) 
 
 stat_div_tree_even <- summarySE(table_div, measurevar = "Evenness", groupvars = "tree", conf.interval = 0.95)
 stat_div_tree_even <- mutate(stat_div_tree_even, indice = "Evennness") %>%
-  rename(avg_val = `Evenness`) 
+  dplyr::rename(avg_val = `Evenness`) 
 
 stat_div_tree_80 <- summarySE(table_div, measurevar = "Species Richness - 80% diversity", groupvars = "tree", conf.interval = 0.95)
 stat_div_tree_80 <- mutate(stat_div_tree_80, indice = "80% diversity") %>%
-  rename(avg_val = `Species Richness - 80% diversity`) 
+  dplyr::rename(avg_val = `Species Richness - 80% diversity`) 
 
 indices_all_tree <- bind_rows(stat_div_tree_chao, stat_div_tree_sw) %>% # spojeni statistiky dohromady
   bind_rows(stat_div_tree_even) %>%
