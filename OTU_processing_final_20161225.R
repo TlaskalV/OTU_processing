@@ -1,5 +1,5 @@
 ####Knihovny####
-
+#test fce git
 # library(swirl)
 library(Rmisc)
 library(dplyr)
