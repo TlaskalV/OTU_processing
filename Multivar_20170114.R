@@ -6,11 +6,14 @@ library(RColorBrewer)
 library(ggplot2)
 library(readr)
 library(xlsx)
-library(Rmisc) # summarySE, musi byt pred dplyr
+library(Rmisc)
 library(dplyr)
 library(tidyr)
 library(agricolae) # anova a post hoc test
-library(gridExtra) # razeni grafu
+library(gridExtra)
+library(grid)
+library(spdep)
+library(fields)
 
 #### Uprava tabulek ####
 
@@ -31,11 +34,23 @@ env$Year <- as.factor(env$Year)
 env$Tree <- as.factor(env$Tree) 
 str(env)
 
-attach(env)
-# detach(env)
-
 otus_w <- tbl_df(otus)
 env_w <- tbl_df(env)
+
+env_NA <- group_by(env_w, Tree, Year) %>% # tato fce nahradi NAs prumery pro shluky vzorku Tree+Year
+  mutate(lig = ifelse(is.na(lig), mean(lig, na.rm = TRUE), lig)) %>%
+  mutate(erg = ifelse(is.na(erg), mean(erg, na.rm = TRUE), erg)) %>%
+  mutate(water = ifelse(is.na(water), mean(water, na.rm = TRUE), water)) %>%
+  mutate(fb_ratio = ifelse(is.na(fb_ratio), mean(fb_ratio, na.rm = TRUE), fb_ratio)) %>%
+  mutate(bac_copy = ifelse(is.na(bac_copy), mean(bac_copy, na.rm = TRUE), bac_copy)) %>%
+  mutate(fun_copy = ifelse(is.na(fun_copy), mean(fun_copy, na.rm = TRUE), fun_copy)) %>%
+  ungroup() %>%
+  select(-dens)
+
+
+attach(env_NA)
+detach(env_NA)
+
 
 otus_percent <- gather(otus_w, sample, count, contains("VOJ")) %>%  # procenta pro OTUs
   group_by(sample) %>%
@@ -44,9 +59,9 @@ otus_percent <- gather(otus_w, sample, count, contains("VOJ")) %>%  # procenta p
   mutate(per = (count / seq_number * 100))
 
 treshold_otus <- group_by(otus_percent, cluster_name) %>%  
-    filter(per > 0.5) %>%                                   # TRESHOLD pro procenta
-    summarise(treshold_count = n()) %>%
-    print
+  filter(per > 0.5) %>%                                   # TRESHOLD pro procenta
+  summarise(treshold_count = n()) %>%
+  print
 
 otus_multivar_titles <- left_join(otus_percent, treshold_otus, by = "cluster_name") %>%
   replace_na(list(treshold_count = 0)) %>% # nahrazeni NA nulou
@@ -65,7 +80,31 @@ cluster <- otus_multivar[,1]
 rownames(otus_multivar) = cluster # pojmenovani radku podle prvniho sloupce
 otus_multivar <- t(otus_multivar[ , 2:ncol(otus_multivar)]) # transpozice a vypusteni prvniho sloupce
 
-spechell <- decostand(otus_multivar, "hellinger") #hellinger transformation
+spechell <- decostand(otus_multivar, "hellinger") #hellinger transformation, multivar OTUs
+spechell_all <- decostand(otus_permut, "hellinger") #hellinger transformation, all OTUs
+
+#### Abundant OTUs ####
+
+otus_abund <- select(otus_percent, c(-seq_number, -count, -No.)) %>% 
+  spread(sample, per) %>%
+  left_join(tax_w, by = "cluster_name") %>%  # spojeni procent s tax
+  gather(sample, per, contains("VOJ"), na.rm = FALSE) %>%  # preformatovani vzorku
+  full_join(samples_w, by = "sample") %>%  # spojeni s charakteristikou vzorku
+  select(cluster_name, Accession, Similarity, Coverage, phylum, class, genus, sample, per, tree, year) %>%
+  replace_na(list(phylum = "unclass", class = "unclass", genus = "unclass")) %>% # nahrazeni NAs
+  semi_join(otus_multivar_titles, by = "cluster_name") %>%  # filtr abundant OTUs z multivar
+  summarySE(measurevar = "per", groupvars = c("year", "tree", "cluster_name"), conf.interval = 0.95)
+
+otus_abund_avg <- select(otus_abund, year, tree, cluster_name, per) %>% # tabulka prumernych hodnot pro skupiny tree_year
+  unite(sample_group, year, tree) %>% # spojeni skupin
+  spread(sample_group, per)
+write.table(otus_abund_avg, file = "otus_abund_avg.csv", row.names = FALSE, col.names = TRUE, dec = ".", sep = ";")
+
+otus_abund_sd <- select(otus_abund, year, tree, cluster_name, se) %>% # tabulka SE hodnot pro skupiny tree_year
+  unite(sample_group, year, tree) %>%
+  spread(sample_group, se)
+write.table(otus_abund_sd, file = "otus_abund_sd.csv", row.names = FALSE, col.names = TRUE, dec = ".", sep = ";")
+
 
 #### NMDS ####
 
@@ -81,14 +120,14 @@ mdsord = metaMDS(comm = spechell, distance = "bray", trace = FALSE) #transf, nej
 # matici vzdalenosti si spocte samo, bray je default, neni treba pouzivat vegdist
 
 mdsord 
-plot(mdsord)
-plot(mdsord, display = "sp") # pouze druhy
+plot(mdsord, type = "t")
+plot(mdsord, display = "sites", type = "t") # pouze druhy
 stressplot(mdsord)
 
 # Primy pristup ke skorum
 
 scores(mdsord) 
-scores(mdsord, display = "sp") 
+scores(mdsord, display = "sites") 
 
 mdsord$points
 mdsord$species
@@ -110,12 +149,12 @@ dev.off()
 pdf("NMDS_final.pdf", paper = 'a4r')
 tiff("NMDS_tree_year2.tiff", height = 210, width = 297, units = "mm", compression = "lzw", res = 300)
 # par(mfrow = c(1, 2)) #dva grafy vedle sebe
-ordisurf(mdsord, pH, main = "", col = "forestgreen", display = "sites", type = "n") #prida izocary pro promenne
+ordisurf(mdsord, water, main = "", col = "forestgreen", display = "sites", type = "n") #prida izocary pro promenne
 # pchlist = c("#E495A5", "#D89F7F", "#BDAB66" ,"#96B56C" ,"#65BC8C", "#39BEB1", "#55B8D0", "#91ACE1", "#C29DDE" ,"#DE94C8")
 plot(mdsord, disp = "sites", type = "n") #, xlim = c(-1.5,1.5), ylim = c(-1,1))
 # mycolors <- (terrain.colors(4))
 mycolors3 <- brewer.pal(3, "Set2")
-mycolors4 <- brewer.pal(4, "Spectral")
+mycolors4 <- brewer.pal(4, "Set1")
 pchlist = c(15, 16, 17)
 points(mdsord, disp = "sites", pch = pchlist[env$Tree], cex = 1.4, col = mycolors4[env$Year])
 points(mdsord, disp = "sites", cex = 1.4, col = mycolors3[env$Tree], pch = 16)
@@ -129,12 +168,13 @@ for (i in 1:nlevels(env$Tree))
   ordiellipse(mdsord, env$Tree, show.groups=levels(env$Tree)[i], kind = c("sd"), conf=0.95, label = FALSE, col = brewer.pal(3, "Spectral")[i])
 text(mdsord,labels = env$Tree, display = "sites",cex = 0.8, pos = 2)
 text(mdsord,labels = env$ID, display = "sites",cex = 0.8, pos = 1)
-legend("bottomright", pch = pchlist, legend=c("Abies","Fagus","Picea"))
-legend("bottomleft",col = mycolors4, pch =19, legend=c("1975","1997","2008","2013"))
+legend("bottomright", pch = pchlist, legend = c("Abies","Fagus","Picea"))
+legend("bottomleft",col = mycolors4, pch = 19, legend = c("1975","1997","2008","2013"))
 legend("bottomleft",col = mycolors3, pch = 19, legend=c("Fagus","Abies","Picea"))
 ordihull(mdsord, grp, lty = 2, col = "darkgreen") #je treba spocitat clustery v kodu nize
-Year = envfit(mdsord, env$Year)
-graf = envfit(mdsord, permutations = 9999, cbind(pH, N, C, NAG, CEL, Tree, Year, CBH, bG)) #funguje lepe nez radky vyse
+set.seed(321)
+Year <- envfit(mdsord, env_NA$Year, permutations = 9999)
+graf <- envfit(mdsord, permutations = 9999, cbind(pH, N, C, Tree, fb_ratio, lig, erg, water)) #funguje lepe nez radky vyse
 plot(graf)
 plot(Year)
 dev.off()
@@ -151,7 +191,6 @@ plot(graf)
 plot(Year)
 dev.off()
 
-
 orditorp(mdsord,display="sites",cex=0.5,air=0.01)  #nahradi body textem
 ordicluster(mdsord,main="",col="red", lwd=1, hclust(vegdist(spechell))) #prida clustery
 ordihull(mdsord, Tree)
@@ -160,6 +199,61 @@ for (i in 1:nlevels(env$Year))
 
 #### ggplot2 ####
 
+#data for plotting NMDS points
+zof.NMDS.data <- select(env_NA, ID, Sample, Tree, Year) # there are other ways of doing this. But this is the way I do it for ease of plotting
+zof.NMDS.data$NMDS1<-mdsord$points[ ,1] # this puts the NMDS scores for the plots into a new dataframe. you could put them into an existing one if you preferred.
+zof.NMDS.data$NMDS2<-mdsord$points[ ,2]
+
+# data for the envfit arrows
+env.scores.zof <- as.data.frame(scores(graf, display = "vectors")) # extracts relevant scores from envfit
+env.scores.zof <- rbind(env.scores.zof, scores(Year, display = "vectors"))
+env.scores.zof <- cbind.data.frame(env.scores.zof, env.variables = rownames(env.scores.zof), stringsAsFactors = FALSE) #and then gives them their names
+class(env.scores.zof[7,3])
+env.scores.zof[4,3] <- "tree"
+
+# Hulls - grouping
+grp.1975 <- zof.NMDS.data[zof.NMDS.data$Year == "1975", ][chull(zof.NMDS.data[zof.NMDS.data$Year == 
+                                                                                "1975", c("NMDS1", "NMDS2")]), ]  # hull values for grp A
+grp.1997 <- zof.NMDS.data[zof.NMDS.data$Year == "1997", ][chull(zof.NMDS.data[zof.NMDS.data$Year == 
+                                                                                "1997", c("NMDS1", "NMDS2")]), ] # hull values for grp B
+grp.2008 <- zof.NMDS.data[zof.NMDS.data$Year == "2008", ][chull(zof.NMDS.data[zof.NMDS.data$Year == 
+                                                                                "2008", c("NMDS1", "NMDS2")]), ]
+grp.2013 <- zof.NMDS.data[zof.NMDS.data$Year == "2013", ][chull(zof.NMDS.data[zof.NMDS.data$Year == 
+                                                                                "2013", c("NMDS1", "NMDS2")]), ]
+hull.data <- rbind(grp.1975, grp.1997, grp.2008, grp.2013)  #combine grp.a and grp.b
+hull.data
+
+# finally plotting
+(zof.nmds.gg1 <- ggplot(data = zof.NMDS.data, aes(y = NMDS2, x = NMDS1)) + 
+    geom_point(aes(shape = Tree, colour = Year), show.legend = TRUE, size = 3) +
+    # stat_ellipse(aes(color = Year), type = "norm", size = 1, level = 0.95, geom = "path") +
+    geom_segment(data = env.scores.zof,
+                 aes(x = 0, xend = 2.5*NMDS1, y = 0, yend = 2.5*NMDS2),
+                 arrow = arrow(length = unit(0.25, "cm")), colour = "#d68f0c") +
+    geom_text(data = env.scores.zof,
+              aes(x = 2.5*NMDS1, y = 2.5*NMDS2, label = env.variables),
+              size = 5,
+              hjust = -0.3) +
+    geom_polygon(data = hull.data, aes(x = NMDS1, y = NMDS2, fill = Year, group = Year), alpha = 0.05, show.legend = FALSE) + 
+    guides(fill = "none") +
+    scale_shape_discrete(name = "Tree species", labels = c("F. sylvatica", "A. alba", "P. abies")) +
+    scale_colour_manual(values = mycolors4 , name = "Age class", labels = c(">38", "38-16", "15-5", "<5")) +
+    scale_x_continuous(breaks = seq(-1, 1.5, by = 1)) +
+    scale_y_continuous(breaks = seq(-1, 1.5, by = 1)) +
+    theme_bw() +
+    theme(axis.title.x = element_text(face = "plain", colour = "black", size = 16), axis.text.x  = element_text(angle = 0, vjust = 0.5, size = 16)) +
+    theme(axis.title.y = element_text(face="plain", colour="black", size = 16), axis.text.y  = element_text(angle=0, vjust=0.5, size=16)) +
+    theme(legend.text = element_text(colour="black", size = 16, face = "italic")) +
+    theme(legend.title = element_text(colour="black", size = 16, face="bold")) +
+    ggtitle("Figure 2"))
+
+ggsave(plot = zof.nmds.gg1, filename = "zof.nmds.gg1.pdf", dpi = 300, height = 210, width = 297, units = "mm")
+
+#### PcoA ####
+
+pcoa <- cmdscale(s.dis, list. = TRUE, k = 3)
+ordiplot(pcoa)
+ordisurf(pcoa, env$N, add = TRUE)
 
 ##### DCA ####
 
@@ -340,13 +434,13 @@ write.table(indicator.species,"indicator.species.txt", sep="\t")
 
 library(indicspecies)
 
-otus_multivar_indic <- otus_multivar 
+otus_multivar_indic <- as.data.frame(otus_permut)
 # otus_multivar_indic <- otus_multivar_indic[,c(ncol(otus_multivar_indic),1:(ncol(otus_multivar_indic)-1))]
 # otus_multivar_indic <- sapply(otus_multivar_indic[,1], as.factor) # nefunguje, je nutne do excel a potom importovat
 
 #run the Indicator Species Analysis using the function "multipatt". The parameter "IndVal.g" calls the indicator species function using a verison that corrects for unequal group size, whereas "duleg" stes whether to use combintaions of a priori classes or not
 set.seed(321)
-indval <- multipatt(otus_multivar_indic, env$Year, func = "IndVal.g", duleg = TRUE, control = how(nperm = 999))
+indval <- multipatt(otus_multivar_indic, env$Year, func = "IndVal.g", duleg = TRUE, control = how(nperm = 9999))
 #output - "A" is the specifity - "B" is the fidelity
 indval
 #short summary only showing significant species
@@ -378,29 +472,86 @@ s.dis <- vegdist(decostand(otus_permut, "hell"), "bray") # all OTUs, hellinger f
 s.dis <- vegdist(spechell, "bray") # multivar OTUs
 
 set.seed(321)
-adonis(s.dis ~ env[,1], nperm = 999) # PERMANOVA for testing influence of 1rd column on the community
+adonis(s.dis ~ env[,1], permutations = 9999) # PERMANOVA for testing influence of 1rd column on the community
 
 set.seed(321)
-adonis(s.dis ~ env$Year, nperm = 999) # strata default - NULL
-adonis(s.dis ~ env$Tree, nperm = 999)
+adonis(s.dis ~ env$Year, permutations = 9999) # strata default - NULL
+adonis(s.dis ~ env$Tree, permutations = 9999)
+adonis(s.dis ~ env$space, permutations = 9999)
+adonis(s.dis ~ env$pH, permutations = 9999)
+adonis(s.dis ~ env$N, permutations = 9999)
+adonis(s.dis ~ env$C, permutations = 9999)
+adonis(s.dis ~ env_NA$lig, permutations = 9999)
+adonis(s.dis ~ env_NA$water, permutations = 9999)
+adonis(s.dis ~ env_NA$erg, permutations = 9999)
 
 set.seed(321)
-adonis(s.dis ~ env$Year, strata = env$Tree, nperm = 999) #strata - permutation only within Shrub categories, correct approach, but rises p value - less significant, p-value corrected
-adonis(s.dis ~ env$Tree, strata = env$Year, nperm = 999) 
+adonis(s.dis ~ env$Year, strata = env$Tree, permutations = 999) #strata - permutation only within Shrub categories, correct approach, but rises p value - less significant, p-value corrected
+adonis(s.dis ~ env$Tree, strata = env$Year, permutations = 999) 
 
 #nested.npmanova(response ~ groups+plots, data = data, method = "bray", permutations = 999) #corrected F-ratio
 
 set.seed(321)
-adonis(s.dis ~ env$Year * Tree, nperm = 999, strata = env$Year)
-adonis(s.dis ~ env$Year + Tree, nperm = 999, strata = env$Year)
-adonis(s.dis ~ env$Tree / Year, nperm = 999, strata = env$Year) #second nested with first
-adonis(s.dis ~ env$NAG * PLFAT, nperm = 999) #test for interaction 
-adonis(s.dis ~ env$NAG + PLFAT, nperm = 999) #test for additive effect
-adonis(s.dis ~ env$Year / pH, nperm = 999, strata = env$Year)
+adonis(s.dis ~ env$Year * Tree, permutations = 9999, strata = env$Year)
+adonis(s.dis ~ env$Year + Tree, permutations = 9999, strata = env$Year)
+adonis(s.dis ~ env_NA$Tree + env_NA$Year * env_NA$pH , permutations = 9999, strata = NULL) 
+adonis(s.dis ~ env_NA$Year + env_NA$pH + env_NA$lig + env_NA$water + env_NA$Tree + env_NA$N + env_NA$C, permutations = 9999, strata = NULL)
+adonis(s.dis ~ env_NA$Year * env_NA$pH + env_NA$water + env_NA$lig + env_NA$Tree + env_NA$N + env_NA$C + env_NA$fb_ratio + env_NA$erg, permutations = 9999, strata = NULL) # asi nejlepsi model, odkryva factory postupne a jejich vliv odcita, neni dobre pouzivat factor z modelu jako stratu a obracene (Jari)
+adonis(s.dis ~ env$Tree / Year, permutations = 999, strata = env$Year) #second nested with first
+adonis(s.dis ~ env$NAG * PLFAT, permutations = 999) #test for interaction 
+adonis(s.dis ~ env$NAG + PLFAT, permutations = 999) #test for additive effect
+adonis(s.dis ~ env$Year / pH, permutations = 999, strata = env$Year)
 
-#Mantel test
+RsquareAdj(0.01404, 120, 1)
+
+##### Mantel test/ geografie #####
+
 set.seed(321)
-mantel(s.dis, vegdist(env$pH, method = "euc"), method = "pearson", permutations = 999, strata = env$Year, na.rm = FALSE)
+mantel(s.dis, vegdist(env$bG, method = "euc"), method = "pearson", permutations = 9999, strata = NULL, na.rm = FALSE)
+
+coord <- cbind(env$x_pata, env$y_pata) #koordinaty
+colnames(coord) <- c("y_pata", "x_pata")
+rownames(coord) <- env$Id
+coord_dist <- vegdist(coord, method = "euclidean", na.rm = TRUE) # distance pro koordinaty
+mantel(s.dis, coord_dist, method = "pearson", permutations = 9999, na.rm = FALSE) # mantel pro koordinaty a OTUs
+ade4::mantel.randtest(m1 = s.dis, m2 = coord_dist, nrepet = 999) # Mantel z jineho balicku
+
+zof.resid <- resid(lm(as.matrix(s.dis) ~ ., data = as.data.frame(coord))) # detrending
+zof.dis <- dist(zof.resid) # Compute the detrended species distance matrix
+
+zof_mantel_cor <- mantel.correlog(D.eco = s.dis, D.geo = NULL, XY = coord, n.class = 0, break.pts = NULL, cutoff = FALSE, r.type = "pearson", nperm = 1000, mult = "holm", progressive = TRUE)
+print(zof_mantel_cor)
+plot(zof_mantel_cor)
+
+# Moranovo I
+zof.connectivity <- adegenet::chooseCN(xy = coord, type = 5, d1 = 0, d2 = "dmin", plot.nb = TRUE, result.type = "listw", edit.nb = FALSE)
+zof.connectivity # konektivita
+
+set.seed(321)
+moran.test(x = mdsord$points[,1], listw = zof.connectivity, alternative = "greater", randomisation = TRUE) # testovani prvni osy z NMDS
+zof.pcoa1.mctest <- moran.mc(x = mdsord$points[,1], listw = zof.connectivity, alternative = "greater", nsim = 1000)
+zof.pcoa1.mctest
+
+moran.test(x = mdsord$points[,2], listw = zof.connectivity, alternative = "greater", randomisation = TRUE) # testovani druhe osy z NMDS
+zof.pcoa2.mctest <- moran.mc(x = mdsord$points[,2], listw = zof.connectivity, alternative = "greater", nsim = 1000)
+zof.pcoa2.mctest
+plot(zof.pcoa2.mctest) # Plot of density of permutations
+moran.plot(x = mdsord$points[,2], listw = zof.connectivity)
+
+# PCNM vektory z koordinat
+distmat <- rdist(cbind(env$y_pata, env$x_pata))    # dist matrix of GPS coordinates
+spatvectors <- pcnm(distmat) # PCNM vektory
+spatvectors
+ordiR2step(rdout, spatvectors, direction = "forward", permutations = how(nperm = 999), trace = TRUE, R2permutations = 1000) # nefunguje
+sigvect <- forward.sel(spechell_all, spatvectors$vectors, nperm = 9999, alpha = 0.05) # forward selection signifikatnich vektoru, nefunguje
+print(sigvect)         		# Shows significant vectors
+
+rdout = rda(spechell)
+plot(rdout)
+
+space <- read.table("clipboard",header=T)   #Significant spatial vectors
+space <- as.matrix(space)
+
 
 #ANOSIM test
 set.seed(321)
@@ -444,6 +595,8 @@ axis_titles <- element_text(size = 12, face = "plain")
 plot_title <- element_text(size = 14, face = "bold")
 legend_title <- element_text(size = 12, face = "bold")
 legend_text <- element_text(size = 11, face = "italic")
+
+title <- textGrob("Supplemetary Figure 1", gp = gpar(fontface = "bold", cex = 1.5))
 
 ##### barplot pH, C, N, qPCR ####
 
@@ -526,16 +679,113 @@ chemics_graf_tree
 ggsave(plot = chemics_graf_tree, filename = "chemics_graf_tree.pdf", dpi = 300, height = 210, width = 297, units = "mm")
 
 ##### scatterplot ####
-scat_rat <- ggplot(env_w, aes(x = N, y = lig, color = Year)) + 
+scat_rat_n_fb <- ggplot(env_w, aes(x = N, y = fb_ratio, color = Year)) + 
   geom_point(shape = 19) + 
   stat_ellipse(na.rm = TRUE) + # 95% CI ellipse
-  theme_bw()
-scat_rat
-ggsave(plot = scat_rat, filename = "scat_lig_n.pdf", dpi = 300, height = 210, width = 297, units = "mm")
+  scale_fill_brewer(palette = "Set1", type = "div", name = "Age class", labels = c(">38", "38-16", "15-5", "<5")) +
+  theme_bw() +
+  theme(legend.position = "none", legend.text = legend_text, legend.title = legend_title, 
+        axis.text.y = y_label, axis.text.x = x_label, axis.title = axis_titles, 
+        plot.title = plot_title, strip.background = element_blank(), strip.text = element_blank(), panel.border = element_blank())
+scat_rat_n_fb
+
+scat_rat_c_n <- ggplot(env_w, aes(x = N, y = C, color = Year)) + 
+  geom_point(shape = 19) + 
+  stat_ellipse(na.rm = TRUE) + # 95% CI ellipse
+  scale_fill_brewer(palette = "Set1", type = "div", name = "Age class", labels = c(">38", "38-16", "15-5", "<5")) +
+  theme_bw() +
+  theme(legend.position = "none", legend.text = legend_text, legend.title = legend_title, 
+        axis.text.y = y_label, axis.text.x = x_label, axis.title = axis_titles, 
+        plot.title = plot_title, strip.background = element_blank(), strip.text = element_blank(), panel.border = element_blank())
+scat_rat_c_n
+
+scat_rat_erg_fb <- ggplot(env_w, aes(x = erg, y = fb_ratio, color = Year)) + 
+  geom_point(shape = 19) + 
+  stat_ellipse(na.rm = TRUE) + # 95% CI ellipse
+  scale_fill_brewer(palette = "Set1", type = "div", name = "Age class", labels = c(">38", "38-16", "15-5", "<5")) +
+  theme_bw() +
+  theme(legend.position = "none", legend.text = legend_text, legend.title = legend_title, 
+        axis.text.y = y_label, axis.text.x = x_label, axis.title = axis_titles, 
+        plot.title = plot_title, strip.background = element_blank(), strip.text = element_blank(), panel.border = element_blank())
+scat_rat_erg_fb
+
+scat_rat_erg_N <- ggplot(env_w, aes(x = erg, y = N, color = Year)) + 
+  geom_point(shape = 19) + 
+  stat_ellipse(na.rm = TRUE) + # 95% CI ellipse
+  scale_fill_brewer(palette = "Set1", type = "div", name = "Age class", labels = c(">38", "38-16", "15-5", "<5")) +
+  theme_bw() +
+  theme(legend.position = "none", legend.text = legend_text, legend.title = legend_title, 
+        axis.text.y = y_label, axis.text.x = x_label, axis.title = axis_titles, 
+        plot.title = plot_title, strip.background = element_blank(), strip.text = element_blank(), panel.border = element_blank())
+scat_rat_erg_N
+
+scat_rat_lig_N <- ggplot(env_w, aes(x = lig, y = N, color = Year)) + 
+  geom_point(shape = 19) + 
+  stat_ellipse(na.rm = TRUE) + # 95% CI ellipse
+  scale_fill_brewer(palette = "Set1", type = "div", name = "Age class", labels = c(">38", "38-16", "15-5", "<5")) +
+  theme_bw() +
+  theme(legend.position = "none", legend.text = legend_text, legend.title = legend_title, 
+        axis.text.y = y_label, axis.text.x = x_label, axis.title = axis_titles, 
+        plot.title = plot_title, strip.background = element_blank(), strip.text = element_blank(), panel.border = element_blank())
+scat_rat_lig_N
+
+scat_rat_lig_erg <- ggplot(env_w, aes(x = lig, y = erg, color = Year)) + 
+  geom_point(shape = 19) + 
+  stat_ellipse(na.rm = TRUE) + # 95% CI ellipse
+  scale_fill_brewer(palette = "Set1", type = "div", name = "Age class", labels = c(">38", "38-16", "15-5", "<5")) +
+  scale_colour_brewer(palette = "Set1" , name = "Age class", labels = c(">38", "38-16", "15-5", "<5")) +
+  theme_bw() +
+  theme(legend.position = "right", legend.text = legend_text, legend.title = legend_title, 
+        axis.text.y = y_label, axis.text.x = x_label, axis.title = axis_titles, 
+        plot.title = plot_title, strip.background = element_blank(), strip.text = element_blank(), panel.border = element_blank())
+scat_rat_lig_erg
+
+scat_rat_lig_water <- ggplot(env_w, aes(x = lig, y = water, color = Year)) + 
+  geom_point(shape = 19) + 
+  stat_ellipse(na.rm = TRUE) + # 95% CI ellipse
+  scale_fill_brewer(palette = "Set1", type = "div", name = "Age class", labels = c(">38", "38-16", "15-5", "<5")) +
+  theme_bw() +
+  theme(legend.position = "none", legend.text = legend_text, legend.title = legend_title, 
+        axis.text.y = y_label, axis.text.x = x_label, axis.title = axis_titles, 
+        plot.title = plot_title, strip.background = element_blank(), strip.text = element_blank(), panel.border = element_blank())
+scat_rat_lig_water
+
+scat_rat_lig_dens <- ggplot(env_w, aes(x = lig, y = dens, color = Year)) + 
+  geom_point(shape = 19) + 
+  stat_ellipse(na.rm = TRUE) + # 95% CI ellipse
+  scale_fill_brewer(palette = "Set1", type = "div", name = "Age class", labels = c(">38", "38-16", "15-5", "<5")) +
+  theme_bw() +
+  theme(legend.position = "none", legend.text = legend_text, legend.title = legend_title, 
+        axis.text.y = y_label, axis.text.x = x_label, axis.title = axis_titles, 
+        plot.title = plot_title, strip.background = element_blank(), strip.text = element_blank(), panel.border = element_blank())
+scat_rat_lig_dens
+
+scat_rat_erg_dens <- ggplot(env_w, aes(x = erg, y = dens, color = Year)) + 
+  geom_point(shape = 19) + 
+  stat_ellipse(na.rm = TRUE) + # 95% CI ellipse
+  scale_fill_brewer(palette = "Set1", type = "div", name = "Age class", labels = c(">38", "38-16", "15-5", "<5")) +
+  theme_bw() +
+  theme(legend.position = "none", legend.text = legend_text, legend.title = legend_title, 
+        axis.text.y = y_label, axis.text.x = x_label, axis.title = axis_titles, 
+        plot.title = plot_title, strip.background = element_blank(), strip.text = element_blank(), panel.border = element_blank())
+scat_rat_erg_dens
+
+scat_rat_fb_water <- ggplot(env_w, aes(x = fb_ratio, y = water, color = Year)) + 
+  geom_point(shape = 19) + 
+  stat_ellipse(na.rm = TRUE) + # 95% CI ellipse
+  scale_fill_brewer(palette = "Set1", type = "div", name = "Age class", labels = c(">38", "38-16", "15-5", "<5")) +
+  theme_bw() +
+  theme(legend.position = "none", legend.text = legend_text, legend.title = legend_title, 
+        axis.text.y = y_label, axis.text.x = x_label, axis.title = axis_titles, 
+        plot.title = plot_title, strip.background = element_blank(), strip.text = element_blank(), panel.border = element_blank())
+scat_rat_fb_water
+
+scatter_chemics <- grid.arrange(scat_rat_n_fb, scat_rat_c_n, scat_rat_erg_fb, scat_rat_erg_N, scat_rat_lig_N, scat_rat_lig_erg, scat_rat_lig_water, scat_rat_lig_dens, scat_rat_erg_dens)
+ggsave(plot = scatter_chemics, filename = "scatter_chemics.pdf", dpi = 300, height = 210, width = 297, units = "mm", limitsize = FALSE)
 
 ##### Boxplots ####
 env_w_spread <- gather(env_w, indice, value, 
-                           c(`C`, `N`, `pH`, `water`, `lig`))
+                       c(`C`, `N`, `pH`, `water`, `lig`))
 
 boxplot_chemics_c <- ggplot(env_w, aes(Year, C, fill = Tree)) +
   geom_boxplot() + 
@@ -562,7 +812,7 @@ boxplot_chemics_n <- ggplot(env_w, aes(Year, N, fill = Tree)) +
   ylab("content [%]") +
   theme_bw() +
   # geom_jitter(width = 0.25, aes(colour = Tree)) +
-  theme(legend.position = "none", legend.text = legend_text, legend.title = legend_title, 
+  theme(legend.position = "right", legend.text = legend_text, legend.title = legend_title, 
         axis.text.y = y_label, axis.text.x = x_label, axis.title = axis_titles, 
         plot.title = plot_title, strip.background = element_blank(), strip.text = element_blank(), panel.border = element_blank())
 boxplot_chemics_n
@@ -607,11 +857,11 @@ boxplot_chemics_lig <- ggplot(env_w, aes(Year, lig, fill = Tree)) +
   ylab("content [%]") +
   theme_bw() +
   # geom_jitter(width = 0.25, aes(colour = Tree)) +
-  theme(legend.position = "right", legend.text = legend_text, legend.title = legend_title, 
+  theme(legend.position = "none", legend.text = legend_text, legend.title = legend_title, 
         axis.text.y = y_label, axis.text.x = x_label, axis.title = axis_titles, 
         plot.title = plot_title, strip.background = element_blank(), strip.text = element_blank(), panel.border = element_blank())
 boxplot_chemics_lig
 
-boxplot_chemics <- grid.arrange(boxplot_chemics_c, boxplot_chemics_n, boxplot_chemics_ph, boxplot_chemics_lig, ncol = 2)
-ggsave(boxplot_chemics, filename = "boxplot_chemics.pdf", dpi = 300, height = 210, width = 297, units = "mm")
+boxplot_chemics <- grid.arrange(boxplot_chemics_c, boxplot_chemics_n, boxplot_chemics_ph, boxplot_chemics_lig, ncol = 2, top = textGrob("Supplementary Figure 1", gp = gpar(cex = 0.7, fontface = "bold", col = "black")))
+ggsave(boxplot_chemics, filename = "boxplot_chemics2.pdf", dpi = 300, height = 210, width = 297, units = "mm")
 
